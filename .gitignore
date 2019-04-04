@@ -2,3 +2,5 @@
 .env
 vendor
 box.phar
+composer.lock
+config/plugins/*
