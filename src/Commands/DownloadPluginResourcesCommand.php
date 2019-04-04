@@ -19,25 +19,33 @@ class DownloadPluginResourcesCommand extends Command implements ContainerAwareIn
 
     protected function configure(): void
     {
-        $this
-            ->setName('plugin:download:resources')
-            ->setDescription('Downloads the resources from account to given folder. Needed for plugin:upload')
-            ->addArgument('path', InputArgument::OPTIONAL, 'Path to /Resources/store folder');
+        $this->setName('plugin:download:resources')->setDescription(
+            'Downloads the resources from account to given folder. Needed for plugin:upload'
+        )->addArgument('path', InputArgument::REQUIRED, 'Path to /Resources/store folder');
     }
 
     protected function execute(InputInterface $input, OutputInterface $output)
     {
         $plugins = Util::getPluginConfigs(true);
 
-        /**
-         * @var PluginConfig $plugin
-         */
-        foreach ($plugins as $plugin)
-        {
-            $p = $input->getArgument('path');
-            $path = $p ? $p: $plugin->path . '/' . $plugin->name;
-            putenv("PLUGIN_ID=" . $plugin->id);
-            $this->container->get(ResourcesDownloader::class)->download($path . '/Resources/store');
+        if (empty($plugins)) {
+            /* old version - should be removed later and path should be optional */
+            if (!Util::getEnv('PLUGIN_ID')) {
+                throw new \RuntimeException('The enviroment variable $PLUGIN_ID is required');
+            }
+
+            $this->container->get(ResourcesDownloader::class)->download($input->getArgument('path'));
+        } else {
+            /* new version - no path needed anymore */
+            /**
+             * @var PluginConfig $plugin
+             */
+            foreach ($plugins as $plugin) {
+                putenv("PLUGIN_ID=" . $plugin->id);
+                $this->container->get(ResourcesDownloader::class)->download(
+                    $path = $plugin->path . '/' . $plugin->name . '/Resources/store'
+                );
+            }
         }
 
         $io = new SymfonyStyle($input, $output);
