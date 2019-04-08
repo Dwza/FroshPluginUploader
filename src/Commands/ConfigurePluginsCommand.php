@@ -19,11 +19,27 @@ use Symfony\Component\Console\Style\SymfonyStyle;
 use Symfony\Component\DependencyInjection\ContainerAwareInterface;
 use Symfony\Component\DependencyInjection\ContainerAwareTrait;
 use Symfony\Component\Filesystem\Filesystem;
-use Symfony\Component\Yaml\Yaml;
 
 class ConfigurePluginsCommand extends Command implements ContainerAwareInterface
 {
     use ContainerAwareTrait;
+
+    /**
+     * @var Filesystem $filesystem
+     */
+    private $filesystem;
+
+    /**
+     * @var SymfonyStyle $io
+     */
+    private $io;
+
+    public function __construct(string $name = null)
+    {
+        parent::__construct($name);
+
+        $this->filesystem = new Filesystem();
+    }
 
     protected function configure()
     {
@@ -34,27 +50,31 @@ class ConfigurePluginsCommand extends Command implements ContainerAwareInterface
 
     protected function execute(InputInterface $input, OutputInterface $output)
     {
-        $io            = new SymfonyStyle($input, $output);
-        $filesystem    = new Filesystem();
+        if (!Util::getEnv('SHOPWARE_ROOT')) {
+            throw new \RuntimeException(
+                'The environment variable SHOPWARE_ROOT is required for this command. Please edit your .env file.'
+            );
+        }
+
+        $this->io      = new SymfonyStyle($input, $output);
         $pluginConfigs = Util::getPluginConfigs();
         $client        = $this->container->get(Client::class);
         $plugins       = $client->Producer()->getPlugins($client->Producer()->getProducer()->id);
 
         foreach ($plugins as $plugin) {
             if (false !== array_search($plugin->name, array_column((array)$pluginConfigs, 'name'))) {
-                $this->updateConfig($plugin, $pluginConfigs[$plugin->id], $io, $filesystem);
+                $this->updateConfig($plugin, $pluginConfigs[$plugin->id]);
             } else {
-                $this->createConfig($plugin, $io, $filesystem);
+                $this->createConfig($plugin);
             }
         }
+        $this->io->success('Done');
     }
 
     /**
      * @param Plugin       $plugin
-     * @param SymfonyStyle $io
-     * @param Filesystem   $fs
      */
-    private function createConfig($plugin, $io, $fs)
+    private function createConfig($plugin)
     {
         $pluginConfig             = new PluginConfig();
         $pluginConfig->id         = $plugin->id;
@@ -63,69 +83,82 @@ class ConfigurePluginsCommand extends Command implements ContainerAwareInterface
         $pluginConfig->status     = $plugin->activationStatus->description;
         $pluginConfig->lastChange = $plugin->lastChange;
 
-        $this->setPluginPath($pluginConfig, $io, $fs);
-
-        $this->saveYaml($pluginConfig, $fs);
-        $io->success("File {$plugin->name}.yaml has been created!");
+        $this->setPluginPath($pluginConfig);
+        $this->saveYaml($pluginConfig);
+        $this->io->note("Created {$plugin->name}.json in config/plugins");
     }
 
     /**
      * @param Plugin       $plugin
      * @param PluginConfig $pluginConfig
-     * @param SymfonyStyle $io
-     * @param Filesystem   $fs
      */
-    private function updateConfig($plugin, $pluginConfig, $io, $fs)
+    private function updateConfig($plugin, $pluginConfig)
     {
         if (!isset($pluginConfig->version) || $pluginConfig->version !== $plugin->latestBinary->version) {
             $pluginConfig->version = $plugin->latestBinary->version;
-            $io->success('Version was updated.');
+            $this->io->note("Updated Version in {$pluginConfig->name}.json");
         }
 
         if (!isset($pluginConfig->lastChange) || $pluginConfig->lastChange !== $plugin->lastChange) {
             $pluginConfig->lastChange = $plugin->lastChange;
-            $io->success('Last change was updated.');
+            $this->io->note("Updated lastChange in {$pluginConfig->name}.json");
         }
 
         if (!isset($pluginConfig->status) || $pluginConfig->status !== $plugin->activationStatus->description) {
             $pluginConfig->status = $plugin->activationStatus->description;
-            $io->success('Status was updated.');
+            $this->io->note("Updated status in {$pluginConfig->name}.json");
         }
 
-        $this->setPluginPath($pluginConfig, $io, $fs);
-
-        $this->saveYaml($pluginConfig, $fs);
-        $io->success("File {$pluginConfig->name}.yaml has been updated!");
+        $this->setPluginPath($pluginConfig);
+        $this->saveYaml($pluginConfig);
     }
 
     /**
      * @param PluginConfig $pluginConfig
-     * @param Filesystem   $fs
      */
-    private function saveYaml($pluginConfig, $fs){
-        $fs->dumpFile(Util::$configDirectory . $pluginConfig->name . '.yaml', Yaml::dump((array)$pluginConfig));
+    private function saveYaml($pluginConfig)
+    {
+        $this->filesystem->dumpFile(
+            Util::$configDirectory . $pluginConfig->name . '.json',
+            json_encode((array)$pluginConfig, JSON_PRETTY_PRINT)
+        );
     }
 
     /**
      * @param PluginConfig $pluginConfig
-     * @param SymfonyStyle $io
-     * @param Filesystem   $fs
      */
-    private function setPluginPath($pluginConfig, $io, $fs)
+    private function setPluginPath($pluginConfig)
     {
         if (!isset($pluginConfig->path) || empty($pluginConfig->path)) {
-            $pluginPath = $io->ask(
-                "Please enter absolute path to folder that contains {$pluginConfig->name}-Folder: ",
-                dirname(__DIR__)
-            );
+            $pluginPath = Util::searchPluginPaths($pluginConfig->name);
 
-            if ($fs->exists(realpath($pluginPath) . '/' . $pluginConfig->name)) {
+
+
+            if (!empty($pluginPath)) {
                 $pluginConfig->path = $pluginPath;
-                $io->success("Path was set. Plugin was found!");
             } else {
-                $io->error(
-                    "Path does not exists or no Plugin with name {$pluginConfig->name} were found. Path set to: null. Re-Run command."
+                $n = $pluginConfig->name;
+                $this->io->caution(
+                    "Could not find {$n} in any directory.\r\nPath was set to: null.\r\nMove {$n} to your project or specify the location of this plugin in {$n}.json"
                 );
+
+
+
+                /*
+                $pluginPath = $this->io->ask(
+                    "Please enter absolute path to folder that contains {$pluginConfig->name}-Folder: ",
+                    getcwd()
+                );
+
+                if ($this->filesystem->exists(realpath($pluginPath) . '/' . $pluginConfig->name)) {
+                    $pluginConfig->path = $pluginPath;
+                    $this->io->success("Path was set. Plugin was found!");
+                } else {
+                    $this->io->error(
+                        "Path does not exists or no Plugin with name {$pluginConfig->name} were found. Path set to: null. Re-Run command."
+                    );
+                }
+                */
             }
         }
     }

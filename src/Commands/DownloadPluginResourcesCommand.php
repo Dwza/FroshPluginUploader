@@ -26,7 +26,7 @@ class DownloadPluginResourcesCommand extends Command implements ContainerAwareIn
 
     protected function execute(InputInterface $input, OutputInterface $output)
     {
-        $plugins = Util::getPluginConfigs(true);
+        $plugins = Util::getPluginConfigs();
 
         if (empty($plugins)) {
             /* old version - should be removed later and path should be optional */
